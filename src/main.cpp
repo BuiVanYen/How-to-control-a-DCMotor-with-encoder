@@ -14,6 +14,9 @@
 #define IN2 6
 
 int pos=0;
+long prevT=0;
+float eprev=0;
+float eintegral=0;
 
 void setup() {
   Serial.begin(9600);
@@ -24,15 +27,51 @@ void setup() {
 }
 
 void loop() {
-    setMotor(1, 25, PWM, IN1, IN2); //quay tiến
-    delay(200);
-    Serial.println(pos);
-    setMotor(-1, 25, PWM, IN1, IN2); //quay lùi
-    delay(200);
-    Serial.println(pos);
-    setMotor(0, 0, PWM, IN1, IN2); //dừng
-    delay(200);
-    Serial.println(pos);
+    // set target position
+    int target = 1200; 
+    //PID constants
+    float Kp = 1;
+    float Ki = 0;
+    float Kd = 0;
+    // time difference
+    long currT = micros();
+
+    float deltaT = ((float)(currT-prevT))/1.0e6; //s
+    prevT = currT;
+
+    // error
+    int e = pos-target;// do đấu dây, nếu chạy ko đúng thì target-pos
+
+    //derivative
+    float derivative = (e-eprev)/deltaT;
+
+    //integral
+    eintegral=eintegral+e*deltaT;
+
+    // control signal
+    float u = Kp*e + Ki*eintegral + Kd*derivative;
+
+    // motor power
+    float pwr=fabs(u);
+    if(pwr>255) {
+        pwr=255;
+    }
+
+    // motor direction
+    int dir=1;
+    if(u<0){
+        dir=-1;
+    }
+    //signal the motor
+    setMotor(dir,pwr,PWM,IN1,IN2);
+
+    //store previous error
+    eprev=e;
+    //print position
+    Serial.print("Target: ");
+    Serial.print(pos);
+    Serial.println();
+    
 }
 void setMotor(int dir, int pwmVal, int pwm, int in1, int in2){
   analogWrite(pwm, pwmVal);
