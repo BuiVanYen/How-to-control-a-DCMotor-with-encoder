@@ -3,18 +3,25 @@
 #define ENCA 2 //Yellow wire
 #define ENCB 3 //white wire
 
+int pos=0;
+
 void setup() {
   Serial.begin(9600);
   pinMode(ENCA, INPUT);
   pinMode(ENCB, INPUT);
+  attachInterrupt(digitalPinToInterrupt(ENCA),readEncoder,RISING);
+  //mỗi khi cạnh lên (RISING) xuất hiện ở ENCA thì chạy readEncoder()
 }
 
 void loop() {
-  int a = digitalRead(ENCA);
+  Serial.println(pos);
+}
+//trên cạnh lên của A, nếu B = 1 thì đang quay một chiều, B = 0 thì chiều ngược lại
+void readEncoder(){
   int b = digitalRead(ENCB);
-  
-  Serial.print(a*5);
-  Serial.print(" ");
-  Serial.println(b*5);
-  Serial.println("-----");
+  if(b>0){
+    pos++;
+    }else{
+    pos--;
+ }
 }
