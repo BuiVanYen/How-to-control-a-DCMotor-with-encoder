@@ -1,98 +1,150 @@
 #include <Arduino.h>
-//Part 3 : Drive the motor
-//Motor Terminal 1 --> motor driver output1
-//Motor Terminal 2 --> motor driver output2'
-//power supply 12V --> motor driver Vin/GND
-//Motor driver gnd --> arduino GND
-//Motor driver PWMA input --> arduino pin 5
-//Motor driver AIN1 input --> arduino pin 7
-//Motor driver AIN2 input --> arduino pin 6
-#define ENCA 2 //Yellow wire
-#define ENCB 3 //white wire
-#define PWM 5 
-#define IN1 7
-#define IN2 6
+#include <util/atomic.h>
 
-int pos=0;
-long prevT=0;
-float eprev=0;
-float eintegral=0;
+// A class to compute the control signal
+class SimplePID{
+  private:
+    float kp, kd, ki, umax; // Parameters
+    float eprev, eintegral; // Storage
+
+  public:
+  // Constructor
+  SimplePID() : kp(1), kd(0), ki(0), umax(255), eprev(0.0), eintegral(0.0){}
+
+  // A function to set the parameters
+  void setParams(float kpIn, float kdIn, float kiIn, float umaxIn){
+    kp = kpIn; kd = kdIn; ki = kiIn; umax = umaxIn;
+  }
+
+  // A function to compute the control signal
+  void evalu(int value, int target, float deltaT, int &pwr, int &dir){
+    // error
+    int e = target - value;
+  
+    // derivative
+    float dedt = (e-eprev)/(deltaT);
+  
+    // integral
+    eintegral = eintegral + e*deltaT;
+  
+    // control signal
+    float u = kp*e + kd*dedt + ki*eintegral;
+  
+    // motor power
+    pwr = (int) fabs(u);
+    if( pwr > umax ){
+      pwr = umax;
+    }
+  
+    // motor direction
+    dir = 1;
+    if(u<0){
+      dir = -1;
+    }
+  
+    // store previous error
+    eprev = e;
+  }
+  
+};
+
+// How many motors
+#define NMOTORS 2
+
+// Pins
+const int enca[] = {0,1};
+const int encb[] = {4,5};
+const int pwm[] = {9,13};
+const int in1[] = {8,11};
+const int in2[] = {10,12};
+
+// Globals
+long prevT = 0;
+volatile int posi[] = {0,0};
+
+// PID class instances
+SimplePID pid[NMOTORS];
 
 void setup() {
   Serial.begin(9600);
-  pinMode(ENCA, INPUT);
-  pinMode(ENCB, INPUT);
-  attachInterrupt(digitalPinToInterrupt(ENCA),readEncoder,RISING);
-  //mỗi khi cạnh lên (RISING) xuất hiện ở ENCA thì chạy readEncoder()
+
+  for(int k = 0; k < NMOTORS; k++){
+    pinMode(enca[k],INPUT);
+    pinMode(encb[k],INPUT);
+    pinMode(pwm[k],OUTPUT);
+    pinMode(in1[k],OUTPUT);
+    pinMode(in2[k],OUTPUT);
+
+    pid[k].setParams(1,0,0,255);
+  }
+  
+  attachInterrupt(digitalPinToInterrupt(enca[0]),readEncoder<0>,RISING);
+  attachInterrupt(digitalPinToInterrupt(enca[1]),readEncoder<1>,RISING);
+  
+  Serial.println("target pos");
 }
 
 void loop() {
-    // set target position
-    int target = 1200; 
-    //PID constants
-    float Kp = 1;
-    float Ki = 0;
-    float Kd = 0;
-    // time difference
-    long currT = micros();
 
-    float deltaT = ((float)(currT-prevT))/1.0e6; //s
-    prevT = currT;
+  // set target position
+  int target[NMOTORS];
+  target[0] = 750*sin(prevT/1e6);
+  target[1] = -750*sin(prevT/1e6);
 
-    // error
-    int e = pos-target;// do đấu dây, nếu chạy ko đúng thì target-pos
+  // time difference
+  long currT = micros();
+  float deltaT = ((float) (currT - prevT))/( 1.0e6 );
+  prevT = currT;
 
-    //derivative
-    float derivative = (e-eprev)/deltaT;
-
-    //integral
-    eintegral=eintegral+e*deltaT;
-
-    // control signal
-    float u = Kp*e + Ki*eintegral + Kd*derivative;
-
-    // motor power
-    float pwr=fabs(u);
-    if(pwr>255) {
-        pwr=255;
+  // Read the position in an atomic block to avoid a potential misread
+  int pos[NMOTORS];
+  ATOMIC_BLOCK(ATOMIC_RESTORESTATE){
+    for(int k = 0; k < NMOTORS; k++){
+      pos[k] = posi[k];
     }
+  }
+  
+  // loop through the motors
+  for(int k = 0; k < NMOTORS; k++){
+    int pwr, dir;
+    // evaluate the control signal
+    pid[k].evalu(pos[k],target[k],deltaT,pwr,dir);
+    // signal the motor
+    setMotor(dir,pwr,pwm[k],in1[k],in2[k]);
+  }
 
-    // motor direction
-    int dir=1;
-    if(u<0){
-        dir=-1;
-    }
-    //signal the motor
-    setMotor(dir,pwr,PWM,IN1,IN2);
-
-    //store previous error
-    eprev=e;
-    //print position
-    Serial.print("Target: ");
-    Serial.print(pos);
-    Serial.println();
-    
+  for(int k = 0; k < NMOTORS; k++){
+    Serial.print(target[k]);
+    Serial.print(" ");
+    Serial.print(pos[k]);
+    Serial.print(" ");
+  }
+  Serial.println();
 }
+
 void setMotor(int dir, int pwmVal, int pwm, int in1, int in2){
-  analogWrite(pwm, pwmVal);
-    if(dir==1){
-        digitalWrite(in1, HIGH);
-        digitalWrite(in2, LOW);
-    }else if(dir==-1){
-        digitalWrite(in1, LOW);
-        digitalWrite(in2, HIGH);
-    }else{
-        digitalWrite(in1, LOW);
-        digitalWrite(in2, LOW);
-    }
+  analogWrite(pwm,pwmVal);
+  if(dir == 1){
+    digitalWrite(in1,HIGH);
+    digitalWrite(in2,LOW);
+  }
+  else if(dir == -1){
+    digitalWrite(in1,LOW);
+    digitalWrite(in2,HIGH);
+  }
+  else{
+    digitalWrite(in1,LOW);
+    digitalWrite(in2,LOW);
+  }  
 }
 
-//trên cạnh lên của A, nếu B = 1 thì đang quay một chiều, B = 0 thì chiều ngược lại
+template <int j>
 void readEncoder(){
-  int b = digitalRead(ENCB);
-  if(b>0){
-    pos++;
-    }else{
-    pos--;
- }
+  int b = digitalRead(encb[j]);
+  if(b > 0){
+    posi[j]++;
+  }
+  else{
+    posi[j]--;
+  }
 }
